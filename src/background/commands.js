@@ -1302,7 +1302,8 @@ modules.commands = (function (settings, helpers) {
                         .indexOf(delta.error.current) >= 0 &&
                       /^https?:/.test(saveData.url)) {
                     retried = true;
-                    fallbackMediaDownload(data.sender.tab.id, saveData, saveAs);
+                    fallbackMediaDownload(data.sender.tab.id, saveData, saveAs,
+                      data.sender.tab && data.sender.tab.url);
                   }
                 }
               };
@@ -1320,9 +1321,81 @@ modules.commands = (function (settings, helpers) {
     return promise.then(() => ({ repeat: true }));
   }
 
-  // Retry a failed media download by fetching the URL from the content script (page context: Referer,
-  // cookies, origin) and saving the result from a background-owned blob URL.
-  function fallbackMediaDownload (tabId, saveData, saveAs) {
+  // Retry a failed media download by fetching the URL in the background script (exempt from
+  // page CSP and CORS thanks to the <all_urls> host permission) with the originating page's
+  // Referer injected via webRequest. Neither downloads.download nor Firefox content-script
+  // fetches reliably send a Referer, and anti-leech CDNs (e.g. *.ib.metapix.net) 403 any
+  // request with a blank Referer.
+  function fallbackMediaDownload (tabId, saveData, saveAs, pageUrl) {
+    console.log('[FG-save] retrying via background fetch:', saveData.url.slice(0, 100));
+    if (!pageUrl || !/^https?:/.test(pageUrl)) {
+      console.log('[FG-save] no usable page URL for Referer injection');
+      return contentFetchFallback(tabId, saveData, saveAs);
+    }
+    // Resolve the redirect chain up front (the 302 hops need no Referer) so the webRequest
+    // filter can cover every URL the real fetch will hit, including the final mirror host.
+    let chain = [ saveData.url ];
+    let walk = (url, hops) => {
+      if (hops <= 0) return Promise.resolve();
+      return fetch(url, { redirect: 'manual', credentials: 'include' }).then(res => {
+        let loc = res.headers.get('Location');
+        if (res.status >= 300 && res.status < 400 && loc) {
+          let next = new URL(loc, url).href;
+          chain.push(next);
+          return walk(next, hops - 1);
+        }
+      }, err => console.log('[FG-save] redirect probe failed:', String(err && err.message || err)));
+    };
+    return walk(saveData.url, 5).then(() => {
+      console.log('[FG-save] redirect chain:', JSON.stringify(chain.map(u => u.slice(0, 120))));
+      return new Promise(resolve => {
+        let injectReferer = details => {
+          let headers = details.requestHeaders.filter(h => h.name.toLowerCase() !== 'referer');
+          headers.push({ name: 'Referer', value: pageUrl });
+          console.log('[FG-save] injected Referer for:', details.url.slice(0, 120));
+          return { requestHeaders: headers };
+        };
+        browser.webRequest.onBeforeSendHeaders.addListener(
+          injectReferer, { urls: chain }, [ 'blocking', 'requestHeaders' ]);
+        let timer = setTimeout(() => {
+          console.log('[FG-save] background fetch timed out');
+          cleanup();
+          resolve(false);
+        }, 30000);
+        let cleanup = () => {
+          browser.webRequest.onBeforeSendHeaders.removeListener(injectReferer);
+          clearTimeout(timer);
+        };
+        fetch(saveData.url, { credentials: 'include' }).then(res => {
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          return res.blob();
+        }).then(blob => {
+          console.log('[FG-save] background fetch OK, bytes:', blob.size);
+          let blobUrl = URL.createObjectURL(blob);
+          setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+          return browser.downloads.download({
+            url: blobUrl,
+            filename: (saveData.name + saveData.ext) || null,
+            saveAs
+          }).then(
+            id => console.log('[FG-save] fallback download started, id:', id),
+            err => console.log('[FG-save] fallback download FAILED:', err && err.message)
+          );
+        }).then(() => {
+          cleanup();
+          resolve(true);
+        }, err => {
+          console.log('[FG-save] background fetch failed:', String(err && err.message || err));
+          cleanup();
+          resolve(false);
+        });
+      });
+    }).then(ok => ok ? null : contentFetchFallback(tabId, saveData, saveAs));
+  }
+
+  // Last resort: fetch the URL from the content script (page cookies/origin) and save the
+  // result from a background-owned blob URL.
+  function contentFetchFallback (tabId, saveData, saveAs) {
     console.log('[FG-save] retrying via content-script fetch:', saveData.url.slice(0, 100));
     return browser.tabs.sendMessage(tabId, {
       topic: 'mg-fetchAsData',
@@ -1334,6 +1407,7 @@ modules.commands = (function (settings, helpers) {
       }
       console.log('[FG-save] fallback fetch OK, bytes:', resp.dataUrl.length);
       let blobUrl = URL.createObjectURL(helpers.dataURItoBlob(resp.dataUrl));
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
       return browser.downloads.download({
         url: blobUrl,
         filename: (saveData.name + saveData.ext) || null,
