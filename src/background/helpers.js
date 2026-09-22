@@ -286,6 +286,11 @@ modules.helpers = (function (module) {
       if (u.hostname === 'cdn.bsky.app' && u.pathname.startsWith('/img/feed_thumbnail/')) {
         return u.origin + u.pathname.replace('/img/feed_thumbnail/', '/img/feed_fullsize/') + u.search;
       }
+      // Inkbunny mirrors: submission pages display the screen-size derivative; the full-size
+      // file sits at the same path under /files/full/.
+      if (/^([a-z0-9-]+\.)?ib\.metapix\.net$/.test(u.hostname) && u.pathname.startsWith('/files/screen/')) {
+        return u.origin + u.pathname.replace('/files/screen/', '/files/full/') + u.search;
+      }
     } catch (e) { /* unparseable URL; leave unchanged */ }
     return url;
   };
