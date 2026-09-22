@@ -1284,7 +1284,19 @@ modules.commands = (function (settings, helpers) {
             filename: (saveData.name + saveData.ext) || null,
             saveAs
           }).then(
-            id => console.log('[FG-save] download started, id:', id),
+            id => {
+              console.log('[FG-save] download started, id:', id);
+              // Watch the download to capture the terminal state and any error code.
+              let listener = delta => {
+                if (delta.id === id && delta.state &&
+                    (delta.state.current === 'complete' || delta.state.current === 'interrupted')) {
+                  console.log('[FG-save] download', delta.state.current +
+                    (delta.error ? ', error: ' + delta.error.current : ''));
+                  browser.downloads.onChanged.removeListener(listener);
+                }
+              };
+              browser.downloads.onChanged.addListener(listener);
+            },
             err => console.log('[FG-save] download FAILED:', err && err.message)
           );
         } else {
