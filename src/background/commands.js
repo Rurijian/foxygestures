@@ -1218,8 +1218,23 @@ modules.commands = (function (settings, helpers) {
         });
       }
 
+      // Blob URLs are owned by the page that created them; the background script cannot fetch or
+      // download them. Ask the content script to read the blob and transfer it as a data URL,
+      // which the data: handling below then converts to a background-context blob.
+      promise = promise.then(data => {
+        if (data.element.mediaSource && data.element.mediaSource.startsWith('blob:')) {
+          console.log('[FG-save] blob URL detected, fetching via content script:', data.element.mediaSource);
+          return browser.tabs.sendMessage(data.sender.tab.id, {
+            topic: 'mg-getBlobData',
+            data
+          });
+        }
+        return data;
+      });
+
       // Collect information such as URL and filename.
       promise = promise.then(data => {
+        console.log('[FG-save] mediaSource:', data.element.mediaSource, 'mediaType:', data.element.mediaType);
         if (data.element.mediaSource) {
           // Convert data URLs to blob as a workaround for:
           // https://bugzilla.mozilla.org/show_bug.cgi?id=1318564
@@ -1243,11 +1258,13 @@ modules.commands = (function (settings, helpers) {
                 url: data.element.mediaSource
               }
             }).then(headers => {
+              console.log('[FG-save] content-script HEAD result:', JSON.stringify(headers));
               // If the content script failed to obtain the headers, the problem may have been that the priviledged
               // script was unable to set the Origin header for a cross-origin request. We can try again here, and 
               // there is a possibility it will work depending on the server's CORS response.
               return headers.error ? helpers.getContentDisposition(data.element.mediaSource) : headers;
             }).then(headers => {
+              console.log('[FG-save] final headers:', JSON.stringify(headers));
               // Fill the missing filename parts from the headers when possible.
               return helpers.suggestFilenameFromHeaders(headers, saveData);
             });
@@ -1261,11 +1278,17 @@ modules.commands = (function (settings, helpers) {
       // Start the download.
       promise = promise.then(saveData => {
         if (saveData) {
+          console.log('[FG-save] downloading:', JSON.stringify({ url: saveData.url.slice(0, 100), filename: (saveData.name + saveData.ext) || null }));
           return browser.downloads.download({
             url: saveData.url,
             filename: (saveData.name + saveData.ext) || null,
             saveAs
-          });
+          }).then(
+            id => console.log('[FG-save] download started, id:', id),
+            err => console.log('[FG-save] download FAILED:', err && err.message)
+          );
+        } else {
+          console.log('[FG-save] nothing to save (no mediaSource)');
         }
       });
     }

@@ -94,6 +94,8 @@ window.fg.extend('mouseEvents', function (exports, fg) {
         return exports.onGetSelectedLinks(message.data);
       case 'mg-getContentDisposition':
         return exports.getContentDisposition(message.data);
+      case 'mg-getBlobData':
+        return exports.getBlobData(message.data);
     }
     return false;
   });
@@ -137,6 +139,34 @@ window.fg.extend('mouseEvents', function (exports, fg) {
         contentType: null,
         contentDisposition: null
       };
+    });
+  };
+
+  // Fetch a page-owned blob: URL from within the content script (where the blob is valid) and return
+  // its contents as a data URL so the background script can save it. On failure, null the mediaSource
+  // so the command degrades to "nothing to save" instead of a broken download.
+  exports.getBlobData = function (data) {
+    return fetch(data.element.mediaSource).then(res => {
+      if (!res.ok) {
+        throw new Error('blob fetch failed: ' + res.status);
+      }
+      return res.blob();
+    }).then(blob => {
+      return new Promise((resolve, reject) => {
+        let reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(blob);
+      });
+    }).then(dataUrl => {
+      console.log('[FG-save] blob read OK, bytes:', dataUrl.length);
+      data.element.mediaSource = dataUrl;
+      return data;
+    }).catch(err => {
+      console.log('[FG-save] blob read FAILED:', err && err.message);
+      data.element.mediaSource = null;
+      data.element.mediaType = null;
+      return data;
     });
   };
 

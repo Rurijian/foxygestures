@@ -143,8 +143,11 @@ window.fg.module('helpers', function (exports) {
   // video or audio sources, and CSS nearby background images.
   exports.getMediaInfo = (element) => {
     if (element instanceof window.HTMLImageElement) {
+      // Prefer currentSrc: it reflects the image actually being displayed, which matters for
+      // srcset/<picture> selection and lazy-loading patterns where src is unset or a placeholder.
+      let source = element.currentSrc || element.src || element.getAttribute('data-src') || '';
       return {
-        source: String(element.src),
+        source: String(source),
         type: null
       };
     } else

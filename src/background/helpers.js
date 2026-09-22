@@ -35,6 +35,11 @@ modules.helpers = (function (module) {
     'image/gif': '.gif',
     'image/bmp': '.bmp',
     'image/webp': '.webp',
+    'image/avif': '.avif',
+    'image/jxl': '.jxl',
+    'image/svg+xml': '.svg',
+    'image/x-icon': '.ico',
+    'image/vnd.microsoft.icon': '.ico',
     // Video
     'video/mp4': '.mp4',
     'video/ogg': '.ogg',
@@ -123,12 +128,13 @@ modules.helpers = (function (module) {
         if (!!~lastDot)  {
           let filename = basename.substring(0, lastDot);
           let extension = basename.substring(lastDot);
+          // Trim any trailing text from the extension.
+          let extMatch = /\.\w+/.exec(extension);
           return {
             name: filename,
-            // Trim any trailing text from the extension.
-            ext: String(/\.\w+/.exec(extension))
+            ext: extMatch ? extMatch[0] : ''
           };
-        } else {          
+        } else {
           return {
             name: basename,
             // Try to guess the extension from the type.
@@ -150,22 +156,25 @@ modules.helpers = (function (module) {
     partialInfo = partialInfo || {};
     partialInfo.ext = partialInfo.ext || '';
     if (headers.contentType) {
-      // Found the content type.
-      partialInfo.ext = mimeToExtensionMap[headers.contentType] || '';
+      // Found the content type. Strip any parameters (e.g. "; charset=...").
+      let mime = headers.contentType.split(';')[0].trim().toLowerCase();
+      partialInfo.ext = mimeToExtensionMap[mime] || partialInfo.ext || '';
     }
 
     partialInfo.name = partialInfo.name || '';
     if (headers.contentDisposition) {
-      // Found the content disposition.
-      let match = /filename="([^"]+)"/i.exec(headers.contentDisposition);
+      // Found the content disposition. Prefer RFC 5987 filename* and accept unquoted values.
+      let match = /filename\*=(?:UTF-8'')?"?([^";]+)"?/i.exec(headers.contentDisposition) ||
+                  /filename="?([^";]+)"?/i.exec(headers.contentDisposition);
       if (match && match[1]) {
+         let headerFilename = decodeURIComponent(match[1]);
          // Split the filename into name and extension.
-         let lastDot = match[1].lastIndexOf('.');
+         let lastDot = headerFilename.lastIndexOf('.');
          if (!!~lastDot)  {
-           partialInfo.name = match[1].substring(0, lastDot);
-           partialInfo.ext = match[1].substring(lastDot);
+           partialInfo.name = headerFilename.substring(0, lastDot);
+           partialInfo.ext = headerFilename.substring(lastDot);
          } else {
-           partialInfo.name = match[1];
+           partialInfo.name = headerFilename;
          }
       }
     }
