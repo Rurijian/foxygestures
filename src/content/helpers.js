@@ -148,7 +148,8 @@ window.fg.module('helpers', function (exports) {
       let source = element.currentSrc || element.src || element.getAttribute('data-src') || '';
       return {
         source: String(source),
-        type: null
+        type: null,
+        tag: 'IMG'
       };
     } else
     if (element instanceof window.HTMLVideoElement ||
@@ -157,7 +158,8 @@ window.fg.module('helpers', function (exports) {
         // Source is on the media element.
         return {
           source: String(element.currentSrc || element.src),
-          type: element.getAttribute('type')
+          type: element.getAttribute('type'),
+          tag: element.tagName
         };
       } else {
         // Look for embedded <source> tags.
@@ -169,7 +171,8 @@ window.fg.module('helpers', function (exports) {
           let element = sources[0];
           return {
             source: String(element.src),
-            type: element.getAttribute('type')
+            type: element.getAttribute('type'),
+            tag: 'VIDEO'
           };
         }
       }
@@ -185,7 +188,8 @@ window.fg.module('helpers', function (exports) {
       // The background scripts can asynchronously get the data later.
       return {
         source: elementRef,
-        type: 'canvasRef'
+        type: 'canvasRef',
+        tag: 'CANVAS'
       };
     }
     return null;

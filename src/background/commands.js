@@ -1208,6 +1208,15 @@ modules.commands = (function (settings, helpers) {
   function commandSaveMediaNow (data, saveAs) {
     let promise = Promise.resolve(data);
     if (data.element.mediaSource) {
+      // Streamed video/audio (MSE blob: sources, HLS/DASH manifests) cannot be saved as a
+      // file by URL — the player assembles it in-page. Hand the page to yt-dlp through the
+      // native messaging host instead.
+      let mediaTag = data.element.mediaTag;
+      if ((mediaTag === 'VIDEO' || mediaTag === 'AUDIO') &&
+          (data.element.mediaSource.startsWith('blob:') ||
+           /\.(m3u8|mpd)(\?|#|$)/i.test(data.element.mediaSource))) {
+        return handoffToYtDlp(data).then(() => ({ repeat: true }));
+      }
       // Due to the performance impact of capturing canvas data it is no longer collected a priori.
       // Instead the canvas element is tagged with a data-fg-ref attribute so it can be located later.
       if (data.element.mediaType === 'canvasRef') {
@@ -1398,6 +1407,45 @@ modules.commands = (function (settings, helpers) {
         });
       });
     }).then(ok => ok ? null : contentFetchFallback(tabId, saveData, saveAs));
+  }
+
+  // Hand a streamed-media page off to yt-dlp via the foxygestures_ytdlp native messaging host.
+  // The host spawns yt-dlp with the captured HLS/DASH manifest URL when there is one, else the
+  // frame/page URL, and logs to native-host/foxygestures_ytdlp.log next to the host exe.
+  function handoffToYtDlp (data) {
+    let pageUrl = (data.context && data.context.frameUrl) ||
+      (data.sender.tab && data.sender.tab.url) || '';
+    let mediaUrl = /^https?:/.test(data.element.mediaSource || '') ? data.element.mediaSource : null;
+    console.log('[FG-ytdlp] handing off page:', pageUrl, 'media:', mediaUrl);
+    return browser.runtime.sendNativeMessage('foxygestures_ytdlp', {
+      url: pageUrl,
+      mediaUrl: mediaUrl,
+      referer: pageUrl
+    }).then(resp => {
+      console.log('[FG-ytdlp] host reply:', JSON.stringify(resp));
+      if (resp && resp.ok) {
+        notifyYtDlp('yt-dlp download started');
+      } else {
+        notifyYtDlp('yt-dlp failed: ' + (resp && resp.error || 'unknown error'));
+      }
+    }, err => {
+      console.log('[FG-ytdlp] native messaging failed:', err && err.message);
+      notifyYtDlp('yt-dlp host error: ' + (err && err.message));
+    });
+  }
+
+  // Show a desktop notification when the optional notifications permission is granted.
+  function notifyYtDlp (message) {
+    browser.permissions.contains({ permissions: [ 'notifications' ] }).then(has => {
+      if (has) {
+        browser.notifications.create({
+          type: 'basic',
+          iconUrl: 'icons/icon.svg',
+          title: 'Foxy Gestures',
+          message
+        }).catch(err => console.log('[FG-ytdlp] notification failed:', err && err.message));
+      }
+    });
   }
 
   // Last resort: fetch the URL from the content script (page cookies/origin) and save the

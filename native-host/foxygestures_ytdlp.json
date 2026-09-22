@@ -1,0 +1,9 @@
+{
+  "name": "foxygestures_ytdlp",
+  "description": "Foxy Gestures yt-dlp video download bridge",
+  "path": "H:\\Tools\\foxygestures\\native-host\\foxygestures_ytdlp.exe",
+  "type": "stdio",
+  "allowed_extensions": [
+    "{e839c3f9-298e-4cd0-99e0-464431cb7c34}"
+  ]
+}

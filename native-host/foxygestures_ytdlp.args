@@ -1,0 +1,11 @@
+# One yt-dlp argument per line. Lines starting with # are comments; blank lines ignored.
+# These arguments are inserted before the URL on every invocation.
+-P
+H:\Users\User\Downloads
+--no-playlist
+--no-progress
+--windows-filenames
+# Uncomment to pull login cookies from Firefox Nightly (needed for login-gated sites).
+# Cookie extraction failure aborts the download, so leave off unless needed.
+# --cookies-from-browser
+# firefox:C:\Users\User\AppData\Roaming\Mozilla\Firefox\Profiles\855g30f3.default-nightly

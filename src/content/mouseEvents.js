@@ -584,6 +584,7 @@ window.fg.module('mouseEvents', function (exports, fg) {
       if (mediaInfo) {
         data.element.mediaSource = mediaInfo.source;
         data.element.mediaType = mediaInfo.type;
+        data.element.mediaTag = mediaInfo.tag;
       }
 
       // Collect information about the enclosing link if present.

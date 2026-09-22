@@ -2,3 +2,5 @@
 node_modules/*
 dist/*
 **/options.css
+native-host/foxygestures_ytdlp.exe
+native-host/foxygestures_ytdlp.log
