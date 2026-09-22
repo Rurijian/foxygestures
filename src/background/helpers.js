@@ -282,6 +282,10 @@ modules.helpers = (function (module) {
           }
         }
       }
+      // Bluesky CDN: timeline/feed thumbnails -> the full-size viewer image.
+      if (u.hostname === 'cdn.bsky.app' && u.pathname.startsWith('/img/feed_thumbnail/')) {
+        return u.origin + u.pathname.replace('/img/feed_thumbnail/', '/img/feed_fullsize/') + u.search;
+      }
     } catch (e) { /* unparseable URL; leave unchanged */ }
     return url;
   };
