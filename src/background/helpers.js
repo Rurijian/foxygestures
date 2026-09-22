@@ -260,6 +260,32 @@ modules.helpers = (function (module) {
     return true;
   };
 
+  // Rewrite a captured media URL to its highest-quality variant for known hosts.
+  // Waterfall sites (Twitter/X timelines etc.) serve downscaled derivatives in-page while
+  // the original lives at the same URL with different parameters. Returns the input
+  // unchanged when no rule matches or the URL is not parseable (data:, blob:, etc.).
+  module.upgradeMediaUrl = (url) => {
+    try {
+      let u = new URL(url);
+      // Twitter/X timeline images: ?format=X&name=small|360x240|... -> name=orig, and the
+      // legacy path-suffix form /media/<id>.jpg:large -> :orig.
+      if (u.hostname === 'pbs.twimg.com' && u.pathname.startsWith('/media/')) {
+        if (u.searchParams.has('name')) {
+          if (u.searchParams.get('name') !== 'orig') {
+            u.searchParams.set('name', 'orig');
+            return u.href;
+          }
+        } else {
+          let suffix = u.pathname.match(/^(\/media\/[^:]+\.\w+):[a-z0-9x]+$/i);
+          if (suffix) {
+            return u.origin + suffix[1] + ':orig';
+          }
+        }
+      }
+    } catch (e) { /* unparseable URL; leave unchanged */ }
+    return url;
+  };
+
   return module;
 
 }(modules.helpers || {}));

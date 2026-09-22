@@ -1236,6 +1236,13 @@ modules.commands = (function (settings, helpers) {
       promise = promise.then(data => {
         console.log('[FG-save] mediaSource:', data.element.mediaSource, 'mediaType:', data.element.mediaType);
         if (data.element.mediaSource) {
+          // Upgrade known size-limited URLs to the original variant (e.g. Twitter timeline
+          // images: name=small -> name=orig) before deriving filename and downloading.
+          let upgraded = helpers.upgradeMediaUrl(data.element.mediaSource);
+          if (upgraded !== data.element.mediaSource) {
+            console.log('[FG-save] upgraded media URL:', upgraded.slice(0, 120));
+            data.element.mediaSource = upgraded;
+          }
           // Convert data URLs to blob as a workaround for:
           // https://bugzilla.mozilla.org/show_bug.cgi?id=1318564
           let url = data.element.mediaSource;

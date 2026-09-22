@@ -578,8 +578,9 @@ window.fg.module('mouseEvents', function (exports, fg) {
         tag: event.target.tagName
       };
 
-      // Search for a media URL related to the element.
-      let mediaInfo = fg.helpers.getMediaInfo(event.target);
+      // Search for a media URL related to the element. Cursor coordinates let the helper see
+      // through overlay elements to the media underneath (timeline cards, link wrappers).
+      let mediaInfo = fg.helpers.getMediaInfo(event.target, event.clientX, event.clientY);
       if (mediaInfo) {
         data.element.mediaSource = mediaInfo.source;
         data.element.mediaType = mediaInfo.type;

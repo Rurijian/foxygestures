@@ -139,9 +139,9 @@ window.fg.module('helpers', function (exports) {
     return text;
   };
 
-  // Find a URL for the image, video, or audio of a DOM element. The function currently looks for image source, HTML5
-  // video or audio sources, and CSS nearby background images.
-  exports.getMediaInfo = (element) => {
+  // Extract a media URL from a single element: image source, HTML5 video or audio source,
+  // or a canvas reference. Returns null when the element carries no media of its own.
+  function mediaFromElement (element) {
     if (element instanceof window.HTMLImageElement) {
       // Prefer currentSrc: it reflects the image actually being displayed, which matters for
       // srcset/<picture> selection and lazy-loading patterns where src is unset or a placeholder.
@@ -187,10 +187,29 @@ window.fg.module('helpers', function (exports) {
         source: elementRef,
         type: 'canvasRef'
       };
-    } else {
-      // TODO Search up to DOM hierarchy for a CSS background image.
     }
     return null;
+  }
+
+  // Find a URL for the image, video, or audio of a DOM element. The gesture target itself is
+  // checked first; when it carries no media (overlay divs, link wrappers, timeline cards),
+  // walk the element stack under the cursor — elementsFromPoint sees through overlays — and
+  // then each stacked element's subtree for the first usable media element.
+  exports.getMediaInfo = (element, clientX, clientY) => {
+    let info = mediaFromElement(element);
+    if (!info && typeof clientX === 'number' && document.elementsFromPoint) {
+      let stack = document.elementsFromPoint(clientX, clientY);
+      for (let i = 0; i < stack.length && !info; i++) {
+        info = mediaFromElement(stack[i]);
+        if (!info && stack[i].querySelector) {
+          let inner = stack[i].querySelector('img, video, audio');
+          if (inner) {
+            info = mediaFromElement(inner);
+          }
+        }
+      }
+    }
+    return info;
   };
 
   // grab the user selected text or text from input fields
