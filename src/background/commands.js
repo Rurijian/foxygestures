@@ -1287,12 +1287,23 @@ modules.commands = (function (settings, helpers) {
             id => {
               console.log('[FG-save] download started, id:', id);
               // Watch the download to capture the terminal state and any error code.
+              let retried = false;
               let listener = delta => {
                 if (delta.id === id && delta.state &&
                     (delta.state.current === 'complete' || delta.state.current === 'interrupted')) {
                   console.log('[FG-save] download', delta.state.current +
                     (delta.error ? ', error: ' + delta.error.current : ''));
                   browser.downloads.onChanged.removeListener(listener);
+                  // The downloads API sends no Referer header; servers with hotlink/referer checks
+                  // (and some dev servers) 403 the request even though the page loads the image fine.
+                  // Retry by fetching from the content script, which carries the page's Referer/cookies.
+                  if (delta.state.current === 'interrupted' && !retried &&
+                      delta.error && [ 'SERVER_FORBIDDEN', 'SERVER_UNREACHABLE', 'NETWORK_FAILED', 'NETWORK_TIMEOUT' ]
+                        .indexOf(delta.error.current) >= 0 &&
+                      /^https?:/.test(saveData.url)) {
+                    retried = true;
+                    fallbackMediaDownload(data.sender.tab.id, saveData, saveAs);
+                  }
                 }
               };
               browser.downloads.onChanged.addListener(listener);
@@ -1307,6 +1318,31 @@ modules.commands = (function (settings, helpers) {
 
     // Allow the wheel or chord gesture to repeat.
     return promise.then(() => ({ repeat: true }));
+  }
+
+  // Retry a failed media download by fetching the URL from the content script (page context: Referer,
+  // cookies, origin) and saving the result from a background-owned blob URL.
+  function fallbackMediaDownload (tabId, saveData, saveAs) {
+    console.log('[FG-save] retrying via content-script fetch:', saveData.url.slice(0, 100));
+    return browser.tabs.sendMessage(tabId, {
+      topic: 'mg-fetchAsData',
+      data: { url: saveData.url }
+    }).then(resp => {
+      if (!resp || resp.error || !resp.dataUrl) {
+        console.log('[FG-save] fallback fetch failed:', resp && resp.error);
+        return;
+      }
+      console.log('[FG-save] fallback fetch OK, bytes:', resp.dataUrl.length);
+      let blobUrl = URL.createObjectURL(helpers.dataURItoBlob(resp.dataUrl));
+      return browser.downloads.download({
+        url: blobUrl,
+        filename: (saveData.name + saveData.ext) || null,
+        saveAs
+      }).then(
+        id => console.log('[FG-save] fallback download started, id:', id),
+        err => console.log('[FG-save] fallback download FAILED:', err && err.message)
+      );
+    });
   }
 
   // Save the media URL of the element under the gesture.

@@ -96,6 +96,8 @@ window.fg.extend('mouseEvents', function (exports, fg) {
         return exports.getContentDisposition(message.data);
       case 'mg-getBlobData':
         return exports.getBlobData(message.data);
+      case 'mg-fetchAsData':
+        return exports.fetchAsData(message.data);
     }
     return false;
   });
@@ -167,6 +169,27 @@ window.fg.extend('mouseEvents', function (exports, fg) {
       data.element.mediaSource = null;
       data.element.mediaType = null;
       return data;
+    });
+  };
+
+  // Fetch an http(s) URL from the page context (carrying the page's Referer and cookies) and return
+  // it as a data URL. Used to retry downloads the server rejected (e.g. 403 from referer checks).
+  exports.fetchAsData = function (data) {
+    return fetch(data.url, { credentials: 'include' }).then(res => {
+      if (!res.ok) {
+        throw new Error('HTTP ' + res.status);
+      }
+      return res.blob();
+    }).then(blob => {
+      return new Promise((resolve, reject) => {
+        let reader = new FileReader();
+        reader.onload = () => resolve({ error: null, dataUrl: reader.result });
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(blob);
+      });
+    }).catch(err => {
+      console.log('[FG-save] fetchAsData FAILED:', String(err && err.message || err));
+      return { error: String(err && err.message || err), dataUrl: null };
     });
   };
 
