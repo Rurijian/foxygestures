@@ -14,6 +14,17 @@
 var modules = modules || {};
 modules.commands = (function (settings, helpers) {
 
+  // URLs of HLS/DASH manifests requested by each tab, freshest last. Consulted when a
+  // video element's src is a blob: (MSE playback), where the real stream URL is otherwise
+  // unreachable from the DOM; handed to yt-dlp by the save-media gesture.
+  const capturedManifests = new Map(); // tabId -> manifest URL
+  browser.webRequest.onBeforeRequest.addListener(
+    details => {
+      if (details.tabId >= 0) capturedManifests.set(details.tabId, details.url);
+    },
+    { urls: ['*://*/*.m3u8*', '*://*/*.mpd*'], types: ['xmlhttprequest', 'media', 'other'] });
+  browser.tabs.onRemoved.addListener(tabId => capturedManifests.delete(tabId));
+
   // Array of groups to organize commands.
   const groups = {
     navigation: {
