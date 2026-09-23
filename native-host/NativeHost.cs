@@ -1,10 +1,17 @@
 // Foxy Gestures yt-dlp native messaging host.
 //
 // Speaks the Firefox native messaging protocol on stdio (4-byte little-endian length
-// prefix + UTF-8 JSON). For each request {url, mediaUrl, referer} it spawns yt-dlp with
+// prefix + UTF-8 JSON). For each request {url, mediaUrl, referer} it launches yt-dlp with
 // the mediaUrl when present (an HLS/DASH manifest captured from the page) else the page
-// URL, replies {"ok":true,"pid":N} immediately, and keeps draining yt-dlp's output into
-// foxygestures_ytdlp.log until the child exits.
+// URL, and replies {"ok":true,"pid":N}.
+//
+// Why the launch goes through WMI: Firefox runs native messaging hosts inside a Windows
+// Job Object configured kill-on-close, and tears the job down seconds after the reply.
+// A plain Process.Start child dies with the job (observed: yt-dlp frozen mid-download,
+// .part file stranded). Win32_Process.Create children are parented to the WMI service,
+// outside the job, so they survive the host's teardown. The yt-dlp command line is written
+// to a temporary .cmd wrapper so its output can be appended to foxygestures_ytdlp.log
+// without inheriting any of the host's pipe handles.
 //
 // Extra yt-dlp arguments come from foxygestures_ytdlp.args next to this exe: one argument
 // per line, '#' starts a comment. That is where the download directory and cookie options
@@ -29,6 +36,18 @@ public class FoxyGesturesYtDlpHost
         try {
             File.AppendAllText(LogPath,
                 DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "  " + message + Environment.NewLine);
+        } catch { }
+    }
+
+    // Remove wrapper scripts left behind by earlier runs.
+    private static void CleanTempWrappers()
+    {
+        try {
+            foreach (string f in Directory.GetFiles(Path.GetTempPath(), "fgytdlp-*.cmd")) {
+                try {
+                    if (File.GetLastWriteTime(f) < DateTime.Now.AddHours(-2)) File.Delete(f);
+                } catch { }
+            }
         } catch { }
     }
 
@@ -113,36 +132,62 @@ public class FoxyGesturesYtDlpHost
         args.Append("-- \"").Append(url).Append("\"");
 
         string exe = FindYtDlp();
-        Log("spawn: " + exe + " " + args);
+        Log("request: " + url);
+
+        // Wrapper script: doubling % protects percent-encoded URLs from batch expansion.
+        // The exit-code line gives the log a definitive end-of-download marker even though
+        // this host may already be gone by then.
+        string cmdPath = Path.Combine(Path.GetTempPath(),
+            "fgytdlp-" + Guid.NewGuid().ToString("N") + ".cmd");
+        string batch =
+            "@echo off\r\n" +
+            "\"" + exe + "\" " + args.ToString().Replace("%", "%%") +
+                " >> \"" + LogPath + "\" 2>&1\r\n" +
+            "echo %date% %time%  yt-dlp exited, code %errorlevel% >> \"" + LogPath + "\"\r\n";
         try {
-            var psi = new ProcessStartInfo(exe, args.ToString());
+            File.WriteAllText(cmdPath, batch);
+        } catch (Exception ex) {
+            return "{\"ok\":false,\"error\":\"wrapper write failed: " + ex.Message.Replace("\"", "'") + "\"}";
+        }
+        Log("wrapper: " + cmdPath + "  spawn: " + exe + " " + args);
+
+        // Create the process via WMI so it is parented outside Firefox's kill-on-close job.
+        // PowerShell exits as soon as the create returns, so waiting for it guarantees the
+        // download exists before we reply (and therefore before any job teardown).
+        string ps =
+            "$s = New-CimInstance -ClassName Win32_ProcessStartup " +
+              "-Property @{ShowWindow=[uint16]0} -ClientOnly; " +
+            "$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create " +
+              "-Arguments @{CommandLine='cmd.exe /c \"" + cmdPath + "\"'; ProcessStartupInformation=$s}; " +
+            "Write-Output ($r.ReturnValue.ToString() + ':' + $r.ProcessId.ToString())";
+        try {
+            var psi = new ProcessStartInfo("powershell.exe",
+                "-NoProfile -WindowStyle Hidden -Command \"" + ps.Replace("\"", "\\\"") + "\"");
             psi.UseShellExecute = false;
             psi.CreateNoWindow = true;
             psi.RedirectStandardOutput = true;
             psi.RedirectStandardError = true;
             Process p = Process.Start(psi);
             lastChild = p;
-            p.OutputDataReceived += delegate(object s, DataReceivedEventArgs e) {
-                if (e.Data != null) Log("yt-dlp: " + e.Data);
-            };
-            p.ErrorDataReceived += delegate(object s, DataReceivedEventArgs e) {
-                if (e.Data != null) Log("yt-dlp! " + e.Data);
-            };
-            p.EnableRaisingEvents = true;
-            p.Exited += delegate(object s, EventArgs e) {
-                Log("yt-dlp exited, code " + p.ExitCode);
-            };
-            p.BeginOutputReadLine();
-            p.BeginErrorReadLine();
-            return "{\"ok\":true,\"pid\":" + p.Id + "}";
+            string outp = p.StandardOutput.ReadToEnd().Trim();
+            string errp = p.StandardError.ReadToEnd().Trim();
+            p.WaitForExit(30000);
+            if (errp.Length > 0) Log("powershell: " + errp);
+            Match m = Regex.Match(outp, @"^(\d+):(\d+)$");
+            if (m.Success && m.Groups[1].Value == "0") {
+                return "{\"ok\":true,\"pid\":" + m.Groups[2].Value + "}";
+            }
+            return "{\"ok\":false,\"error\":\"wmi create failed: " +
+                (m.Success ? "code " + m.Groups[1].Value : (outp + " " + errp).Replace("\"", "'")) + "\"}";
         } catch (Exception ex) {
-            Log("spawn failed: " + ex);
+            Log("wmi spawn failed: " + ex);
             return "{\"ok\":false,\"error\":\"" + ex.Message.Replace("\"", "'") + "\"}";
         }
     }
 
     public static int Main()
     {
+        CleanTempWrappers();
         Stream stdin = Console.OpenStandardInput();
         Stream stdout = Console.OpenStandardOutput();
         while (true) {
@@ -153,12 +198,11 @@ public class FoxyGesturesYtDlpHost
             byte[] buf = new byte[len];
             if (ReadFully(stdin, buf, len) < len) break;
             string json = Encoding.UTF8.GetString(buf);
-            Log("request: " + json);
             SendJson(stdout, HandleRequest(json));
         }
-        // The browser closes the pipe after the reply. Keep the process alive until yt-dlp
-        // exits so its output keeps draining into the log instead of hitting a broken pipe.
-        try { if (lastChild != null && !lastChild.HasExited) lastChild.WaitForExit(); } catch { }
+        // The browser closes the pipe after the reply; nothing of ours outlives that except
+        // the WMI-created yt-dlp, which is precisely the point.
+        try { if (lastChild != null && !lastChild.HasExited) lastChild.WaitForExit(5000); } catch { }
         return 0;
     }
 }
