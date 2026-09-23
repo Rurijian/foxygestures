@@ -114,14 +114,27 @@ public class FoxyGesturesYtDlpHost
         stdout.Flush();
     }
 
+    // Make a page title safe as a literal in a yt-dlp -o template and a Windows filename:
+    // strip path-invalid characters and quotes, collapse whitespace, cap the length so
+    // " [id].ext" plus the download path stay well under MAX_PATH.
+    private static string SanitizeTitle(string title)
+    {
+        string t = Regex.Replace(title, "[<>:\"/\\\\|?*\\x00-\\x1f]", " ");
+        t = Regex.Replace(t, "\\s+", " ").Trim().TrimEnd('.');
+        if (t.Length > 100) t = t.Substring(0, 100).TrimEnd();
+        return t;
+    }
+
     private static string HandleRequest(string json)
     {
-        string url = JsonString(json, "mediaUrl");
-        if (string.IsNullOrEmpty(url)) url = JsonString(json, "url");
+        string mediaUrl = JsonString(json, "mediaUrl");
+        string pageUrl = JsonString(json, "url");
+        string url = !string.IsNullOrEmpty(mediaUrl) ? mediaUrl : pageUrl;
         string referer = JsonString(json, "referer");
+        string title = JsonString(json, "title");
         if (string.IsNullOrEmpty(url)) return "{\"ok\":false,\"error\":\"no url in request\"}";
 
-        // Defang quotes so a crafted URL cannot break out of its argument.
+        // Defang quotes so a crafted value cannot break out of its argument.
         url = url.Replace("\"", "");
         if (referer != null) referer = referer.Replace("\"", "");
 
@@ -129,10 +142,17 @@ public class FoxyGesturesYtDlpHost
         string cfg = ConfigArgs();
         if (cfg.Length > 0) args.Append(cfg).Append(' ');
         if (!string.IsNullOrEmpty(referer)) args.Append("--referer \"").Append(referer).Append("\" ");
+        // A direct manifest URL goes through yt-dlp's generic extractor, which names the
+        // output after the URL slug ("video [video].mp4"). Use the tab title instead.
+        // Page-URL handoffs keep the site extractor's own richer naming.
+        if (!string.IsNullOrEmpty(mediaUrl) && !string.IsNullOrEmpty(title)) {
+            string safe = SanitizeTitle(title);
+            if (safe.Length > 0) args.Append("-o \"").Append(safe).Append(" [%(id)s].%(ext)s\" ");
+        }
         args.Append("-- \"").Append(url).Append("\"");
 
         string exe = FindYtDlp();
-        Log("request: " + url);
+        Log("request: " + url + (string.IsNullOrEmpty(title) ? "" : "  title: " + title));
 
         // Wrapper script: doubling % protects percent-encoded URLs from batch expansion.
         // The exit-code line gives the log a definitive end-of-download marker even though

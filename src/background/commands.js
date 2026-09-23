@@ -1437,7 +1437,8 @@ modules.commands = (function (settings, helpers) {
     return browser.runtime.sendNativeMessage('foxygestures_ytdlp', {
       url: pageUrl,
       mediaUrl: mediaUrl,
-      referer: pageUrl
+      referer: pageUrl,
+      title: (data.sender.tab && data.sender.tab.title) || ''
     }).then(resp => {
       console.log('[FG-ytdlp] host reply:', JSON.stringify(resp));
       if (resp && resp.ok) {
