@@ -5,7 +5,7 @@ H:\Users\User\Downloads
 --no-playlist
 --no-progress
 --windows-filenames
-# Uncomment to pull login cookies from Firefox Nightly (needed for login-gated sites).
-# Cookie extraction failure aborts the download, so leave off unless needed.
-# --cookies-from-browser
-# firefox:C:\Users\User\AppData\Roaming\Mozilla\Firefox\Profiles\855g30f3.default-nightly
+# Pull login cookies from Firefox Nightly: needed for sensitive-marked/login-gated
+# tweets (anonymous GraphQL returns no media for them). Verified working 2026-09-22.
+--cookies-from-browser
+firefox:C:\Users\User\AppData\Roaming\Mozilla\Firefox\Profiles\855g30f3.default-nightly

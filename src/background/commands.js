@@ -1416,6 +1416,12 @@ modules.commands = (function (settings, helpers) {
     let pageUrl = (data.context && data.context.frameUrl) ||
       (data.sender.tab && data.sender.tab.url) || '';
     let mediaUrl = /^https?:/.test(data.element.mediaSource || '') ? data.element.mediaSource : null;
+    // For MSE playback the element src is a blob: — fall back to the HLS/DASH manifest URL
+    // captured from this tab's network requests, so yt-dlp can hit the CDN directly even
+    // when its site extractor has no access to the post (e.g. logged-out-hidden Bluesky).
+    if (!mediaUrl && data.sender.tab && capturedManifests.has(data.sender.tab.id)) {
+      mediaUrl = capturedManifests.get(data.sender.tab.id);
+    }
     console.log('[FG-ytdlp] handing off page:', pageUrl, 'media:', mediaUrl);
     return browser.runtime.sendNativeMessage('foxygestures_ytdlp', {
       url: pageUrl,
