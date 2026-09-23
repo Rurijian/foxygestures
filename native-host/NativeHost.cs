@@ -132,50 +132,69 @@ public class FoxyGesturesYtDlpHost
     {
         string mediaUrl = JsonString(json, "mediaUrl");
         string pageUrl = JsonString(json, "url");
-        string url = !string.IsNullOrEmpty(mediaUrl) ? mediaUrl : pageUrl;
         string referer = JsonString(json, "referer");
         string title = JsonString(json, "title");
-        if (string.IsNullOrEmpty(url)) return "{\"ok\":false,\"error\":\"no url in request\"}";
 
         // Defang quotes so a crafted value cannot break out of its argument.
-        url = url.Replace("\"", "");
+        if (mediaUrl != null) mediaUrl = mediaUrl.Replace("\"", "");
+        if (pageUrl != null) pageUrl = pageUrl.Replace("\"", "");
         if (referer != null) referer = referer.Replace("\"", "");
+        if (string.IsNullOrEmpty(mediaUrl) && string.IsNullOrEmpty(pageUrl))
+            return "{\"ok\":false,\"error\":\"no url in request\"}";
+        if (string.IsNullOrEmpty(pageUrl) || pageUrl == mediaUrl) pageUrl = null;
+        if (string.IsNullOrEmpty(mediaUrl)) mediaUrl = null;
 
-        var args = new StringBuilder();
+        var common = new StringBuilder();
         string cfg = ConfigArgs();
-        if (cfg.Length > 0) args.Append(cfg).Append(' ');
-        if (!string.IsNullOrEmpty(referer)) args.Append("--referer \"").Append(referer).Append("\" ");
-        // A direct manifest URL goes through yt-dlp's generic extractor, which names the
-        // output after the URL slug ("video [video].mp4"). Use the tab title instead.
-        // Page-URL handoffs keep the site extractor's own richer naming.
-        if (!string.IsNullOrEmpty(mediaUrl) && !string.IsNullOrEmpty(title)) {
+        if (cfg.Length > 0) common.Append(cfg).Append(' ');
+        if (!string.IsNullOrEmpty(referer)) common.Append("--referer \"").Append(referer).Append("\" ");
+
+        // A bare manifest URL goes through yt-dlp's generic extractor: it names the output
+        // after the URL slug ("video [video].mp4") and, for sites that split audio into a
+        // separate HLS rendition (Twitter, Bluesky), silently downloads video-only. The
+        // page URL's site extractor assembles the full A/V stream properly — so try it
+        // first and fall back to the captured manifest only if extraction fails (the
+        // fallback is what rescues posts hidden from logged-out viewers).
+        string manifestArgs = common.ToString();
+        if (mediaUrl != null && !string.IsNullOrEmpty(title)) {
             string safe = SanitizeTitle(title);
-            if (safe.Length > 0) args.Append("-o \"").Append(safe).Append(" [%(id)s].%(ext)s\" ");
+            if (safe.Length > 0) manifestArgs += "-o \"" + safe + " [%(id)s].%(ext)s\" ";
         }
-        args.Append("-- \"").Append(url).Append("\"");
 
         string exe = FindYtDlp();
-        Log("request: " + url + (string.IsNullOrEmpty(title) ? "" : "  title: " + title));
+        Log("request: page=" + (pageUrl ?? "-") + "  manifest=" + (mediaUrl ?? "-") +
+            (string.IsNullOrEmpty(title) ? "" : "  title: " + title));
 
-        // Wrapper script: doubling % protects percent-encoded URLs from batch expansion.
-        // The exit-code line gives the log a definitive end-of-download marker even though
-        // this host may already be gone by then.
+        // Wrapper script: doubling % protects percent-encoded URLs and the %(id)s template
+        // from batch expansion. cmd parses batch files in the OEM codepage; chcp 65001
+        // makes it read this UTF-8 file correctly (an em-dash otherwise becomes "ΓÇö").
         string cmdPath = Path.Combine(Path.GetTempPath(),
             "fgytdlp-" + Guid.NewGuid().ToString("N") + ".cmd");
-        string batch =
-            "@echo off\r\n" +
-            // The wrapper is written as UTF-8; cmd would otherwise parse it using the OEM
-            // codepage and Unicode titles would arrive mangled (an em-dash becomes "ΓÇö").
-            "chcp 65001 >nul\r\n" +
-            "\"" + exe + "\" " + args.ToString().Replace("%", "%%") +
-                " >> \"" + LogPath + "\" 2>&1\r\n" +
-            "echo %date% %time%  yt-dlp exited, code %errorlevel% >> \"" + LogPath + "\"\r\n";
+        var batch = new StringBuilder("@echo off\r\nchcp 65001 >nul\r\n");
+        if (pageUrl != null) {
+            batch.Append('\"').Append(exe).Append("\" ").Append(common.ToString().Replace("%", "%%"))
+                .Append("-- \"").Append(pageUrl.Replace("%", "%%")).Append("\"")
+                .Append(" >> \"").Append(LogPath).Append("\" 2>&1\r\n");
+        }
+        if (mediaUrl != null) {
+            string manifestLine = '\"' + exe + "\" " + manifestArgs.Replace("%", "%%") +
+                "-- \"" + mediaUrl.Replace("%", "%%") + "\" >> \"" + LogPath + "\" 2>&1";
+            if (pageUrl != null) {
+                batch.Append("if errorlevel 1 (\r\n")
+                    .Append("  echo %date% %time%  page-URL extraction failed, retrying captured manifest >> \"")
+                    .Append(LogPath).Append("\"\r\n  ").Append(manifestLine).Append("\r\n)\r\n");
+            } else {
+                batch.Append(manifestLine).Append("\r\n");
+            }
+        }
+        batch.Append("echo %date% %time%  yt-dlp exited, code %errorlevel% >> \"")
+            .Append(LogPath).Append("\"\r\n");
         try {
-            File.WriteAllText(cmdPath, batch);
+            File.WriteAllText(cmdPath, batch.ToString());
         } catch (Exception ex) {
             return "{\"ok\":false,\"error\":\"wrapper write failed: " + ex.Message.Replace("\"", "'") + "\"}";
         }
-        Log("wrapper: " + cmdPath + "  spawn: " + exe + " " + args);
+        Log("wrapper: " + cmdPath);
 
         // Create the process via WMI so it is parented outside Firefox's kill-on-close job.
         // PowerShell exits as soon as the create returns, so waiting for it guarantees the
