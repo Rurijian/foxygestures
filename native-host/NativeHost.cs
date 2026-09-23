@@ -67,7 +67,10 @@ public class FoxyGesturesYtDlpHost
     {
         Match m = Regex.Match(json, "\"" + Regex.Escape(key) + "\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"");
         if (!m.Success) return null;
-        return m.Groups[1].Value
+        string v = m.Groups[1].Value;
+        v = Regex.Replace(v, "\\\\u([0-9a-fA-F]{4})",
+            mm => ((char)int.Parse(mm.Groups[1].Value, System.Globalization.NumberStyles.HexNumber)).ToString());
+        return v
             .Replace("\\/", "/")
             .Replace("\\\"", "\"")
             .Replace("\\n", "\n")
@@ -161,6 +164,9 @@ public class FoxyGesturesYtDlpHost
             "fgytdlp-" + Guid.NewGuid().ToString("N") + ".cmd");
         string batch =
             "@echo off\r\n" +
+            // The wrapper is written as UTF-8; cmd would otherwise parse it using the OEM
+            // codepage and Unicode titles would arrive mangled (an em-dash becomes "ΓÇö").
+            "chcp 65001 >nul\r\n" +
             "\"" + exe + "\" " + args.ToString().Replace("%", "%%") +
                 " >> \"" + LogPath + "\" 2>&1\r\n" +
             "echo %date% %time%  yt-dlp exited, code %errorlevel% >> \"" + LogPath + "\"\r\n";
